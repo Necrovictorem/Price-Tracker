@@ -23,13 +23,31 @@ class Listing:
 
 def _has_term(title: str, term: str) -> bool:
     # Whole-word match, so "unlocked" doesn't hit "locked" and "series" doesn't hit "es".
-    return re.search(rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])", title.lower()) is not None
+    # A trailing "*" lets letters follow: "3200*" matches "3200", "3200aa", "3200mhz" but not "32000".
+    if term.endswith("*"):
+        pattern = rf"(?<![a-z0-9]){re.escape(term[:-1].lower())}(?![0-9])"
+    else:
+        pattern = rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])"
+    return re.search(pattern, title.lower()) is not None
+
+
+def _normalize(item: Item, title: str) -> str:
+    title = title.lower()
+    # "64 GB" and "64GB" should match the same rule.
+    title = re.sub(r"(\d+)\s+gb\b", r"\1gb", title)
+    # "8x64GB" -> "8x 64gb", so the stick count and the stick size can be matched separately.
+    title = re.sub(r"(\d+x)(\d)", r"\1 \2", title)
+    # Phrases like "never mined" must not trip the "mined" exclude rule.
+    for phrase in item.ignore:
+        title = title.replace(phrase.lower(), " ")
+    return title
 
 
 def is_valid(item: Item, listing: Listing) -> bool:
-    if not all(_has_term(listing.title, t) for t in item.require):
+    title = _normalize(item, listing.title)
+    if not all(_has_term(title, t) for t in item.require):
         return False
-    return not any(_has_term(listing.title, t) for t in item.exclude)
+    return not any(_has_term(title, t) for t in item.exclude)
 
 
 def lowest_valid(item: Item, listings: list[Listing]) -> tuple[Listing | None, int]:
