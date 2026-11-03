@@ -27,3 +27,13 @@ py -m venv .venv
 ```
 
 Tests must not hit the network; mock HTTP with `respx`.
+
+## Security
+- The dashboard is read-only: no forms, logins, or buttons that change data or run commands.
+- The web server listens on 127.0.0.1 only. Phone access goes through `tailscale serve`;
+  never router port forwarding, never `tailscale funnel`.
+- Listing titles and URLs come from strangers on eBay: always HTML-escape them,
+  and never build SQL or shell commands from them.
+- SQL always uses `?` placeholders.
+- Keep dependencies few; run `pip-audit` before adding or updating one.
+- Secrets live only in `.env`: never in code, logs, alerts or commits.
