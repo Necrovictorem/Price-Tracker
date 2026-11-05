@@ -1,4 +1,11 @@
-"""r/hardwareswap collector via Reddit's official API (app-only OAuth; no user login)."""
+"""r/hardwareswap collector via Reddit's official API (app-only OAuth; no user login).
+
+Status: written and tested, but not currently wired into cli.py. Reddit declined
+the Data API access request on 2026-11-04 (generic "not in compliance with
+Responsible Builder Policy and/or lacks necessary details" — no specifics given).
+See the commented-out block in cli.py's run() for how to re-enable this if
+access is ever granted on a future request.
+"""
 
 import re
 

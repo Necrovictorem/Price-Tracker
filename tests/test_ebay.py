@@ -35,8 +35,8 @@ def test_parse_listings():
 
 @respx.mock
 def test_token_and_search():
-    respx.post(ebay.TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "tok"}))
-    search = respx.get(ebay.SEARCH_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
+    respx.post(ebay.PROD_TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "tok"}))
+    search = respx.get(ebay.PROD_SEARCH_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
     with httpx.Client() as client:
         token = ebay.get_token(client, "id", "secret")
         listings = ebay.search(client, token, EPYC_7B13)
@@ -45,3 +45,14 @@ def test_token_and_search():
     req = search.calls.last.request
     assert req.headers["Authorization"] == "Bearer tok"
     assert "conditions%3A%7BUSED%7D" in str(req.url) or "conditions:{USED}" in str(req.url)
+
+
+@respx.mock
+def test_sandbox_uses_sandbox_urls():
+    respx.post(ebay.SANDBOX_TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "tok"}))
+    respx.get(ebay.SANDBOX_SEARCH_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
+    with httpx.Client() as client:
+        token = ebay.get_token(client, "id", "secret", sandbox=True)
+        listings = ebay.search(client, token, EPYC_7B13, sandbox=True)
+    assert token == "tok"
+    assert len(listings) == 2

@@ -7,15 +7,17 @@ import httpx
 from ..filters import Listing
 from ..items import Item
 
-TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
-SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+PROD_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
+PROD_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+SANDBOX_TOKEN_URL = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
+SANDBOX_SEARCH_URL = "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
 SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 
-def get_token(client: httpx.Client, client_id: str, client_secret: str) -> str:
+def get_token(client: httpx.Client, client_id: str, client_secret: str, *, sandbox: bool = False) -> str:
     basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     resp = client.post(
-        TOKEN_URL,
+        SANDBOX_TOKEN_URL if sandbox else PROD_TOKEN_URL,
         headers={"Authorization": f"Basic {basic}", "Content-Type": "application/x-www-form-urlencoded"},
         data={"grant_type": "client_credentials", "scope": SCOPE},
     )
@@ -45,9 +47,9 @@ def parse_listings(payload: dict) -> list[Listing]:
     return listings
 
 
-def search(client: httpx.Client, token: str, item: Item, limit: int = 200) -> list[Listing]:
+def search(client: httpx.Client, token: str, item: Item, *, sandbox: bool = False, limit: int = 200) -> list[Listing]:
     resp = client.get(
-        SEARCH_URL,
+        SANDBOX_SEARCH_URL if sandbox else PROD_SEARCH_URL,
         headers={"Authorization": f"Bearer {token}", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US"},
         params={
             "q": item.query,
