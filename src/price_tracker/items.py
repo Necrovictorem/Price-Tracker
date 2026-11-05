@@ -11,6 +11,8 @@ class Item:
     require: list[str] = field(default_factory=list)
     # Any of these terms in the title rejects the listing.
     exclude: list[str] = field(default_factory=list)
+    # Any of these terms flags the listing for manual review instead of excluding or tracking it.
+    review: list[str] = field(default_factory=list)
     # Phrases removed from the title before matching (e.g. "never mined").
     ignore: list[str] = field(default_factory=list)
     conditions: str = "USED"
@@ -19,22 +21,33 @@ class Item:
 CPU_EXCLUDE = [
     "lock", "locked", "vendor lock", "vendor locked",
     "dell", "lenovo", "hp", "hpe",
-    "for parts", "not working", "broken",
+    "for parts", "parts only", "parts or repair", "not working", "non-working", "non working", "broken",
     "lot", "x2", "2x", "pair", "qty",
     "engineering sample", "es", "qs",
 ]
 
-BOARD_EXCLUDE = ["for parts", "not working", "broken", "as is", "bent pins", "lot"]
+BOARD_EXCLUDE = [
+    "for parts", "parts only", "parts or repair", "not working", "non-working", "non working", "broken",
+    "as is", "bent pins", "lot",
+    # Accessories that mention the board model name
+    "riser", "i/o shield", "bios chip", "cooler", "rdimm", "memory", "heat sink", "heatsink",
+]
 
-RAM_EXCLUDE = ["udimm", "sodimm", "so-dimm", "laptop", "desktop", "for parts", "not working"]
+RAM_EXCLUDE = [
+    "udimm", "sodimm", "so-dimm", "laptop", "desktop",
+    "for parts", "not working", "non-working", "non working",
+]
 
 GPU_EXCLUDE = [
     # Not a working card
-    "for parts", "not working", "broken", "as is", "untested", "no display", "artifacts",
+    "for parts", "parts only", "parts or repair", "not working", "non-working", "non working",
+    "broken", "as is", "untested", "no display", "artifacts", "no gpu",
+    "no core", "no vram",
     # Not a single card
     "lot", "bundle", "x2", "2x", "pair",
     # Accessories that mention the model name
-    "box only", "empty box", "waterblock", "water block", "backplate", "bracket", "shroud",
+    "box only", "empty box", "packaging only", "waterblock", "water block", "block",
+    "backplate", "bracket", "shroud", "heatsink", "enclosure", "connector", "case for",
     # Mining history
     "mining", "mined", "miner", "crypto", "eth", "ethereum", "hashrate", "rig",
 ]
@@ -42,7 +55,7 @@ GPU_EXCLUDE = [
 GPU_IGNORE = ["never mined", "not mined", "no mining", "non mining", "non-mining"]
 
 # Whole computers that contain the GPU
-PREBUILT = ["pc", "desktop", "computer", "system", "laptop", "notebook"]
+PREBUILT = ["pc", "desktop", "computer", "system", "laptop", "notebook", "zbook", "ryzen", "intel core"]
 
 
 # Path A: Milan + DDR4 (8 channels, ~205 GB/s)
@@ -57,6 +70,7 @@ H12SSL = Item(
     query="Supermicro H12SSL",
     require=["h12ssl"],
     exclude=BOARD_EXCLUDE,
+    review=["combo*", "bundle*"],
     conditions="NEW|USED",
 )
 
@@ -84,6 +98,7 @@ H13SSL_N = Item(
     query="Supermicro H13SSL-N",
     require=["h13ssl"],
     exclude=BOARD_EXCLUDE,
+    review=["combo*", "bundle*"],
     conditions="NEW|USED",
 )
 
@@ -100,7 +115,7 @@ RTX_PRO_4500 = Item(
     id="rtx-pro-4500",
     query="RTX PRO 4500 Blackwell",
     require=["4500", "blackwell"],
-    exclude=GPU_EXCLUDE + ["ada"],
+    exclude=GPU_EXCLUDE + PREBUILT + ["ada"],
     ignore=GPU_IGNORE,
     conditions="NEW|USED",
 )
@@ -109,7 +124,7 @@ RTX_PRO_5000 = Item(
     id="rtx-pro-5000",
     query="RTX PRO 5000 Blackwell",
     require=["5000", "blackwell"],
-    exclude=GPU_EXCLUDE + ["ada"],
+    exclude=GPU_EXCLUDE + PREBUILT + ["ada"],
     ignore=GPU_IGNORE,
     conditions="NEW|USED",
 )
@@ -118,7 +133,7 @@ RTX_PRO_6000 = Item(
     id="rtx-pro-6000",
     query="RTX PRO 6000 Blackwell",
     require=["6000", "blackwell"],
-    exclude=GPU_EXCLUDE + ["ada"],
+    exclude=GPU_EXCLUDE + PREBUILT + ["ada"],
     ignore=GPU_IGNORE,
     conditions="NEW|USED",
 )
@@ -127,7 +142,7 @@ RTX_5090 = Item(
     id="rtx-5090",
     query="RTX 5090",
     require=["5090"],
-    exclude=GPU_EXCLUDE + PREBUILT,
+    exclude=GPU_EXCLUDE + PREBUILT + ["workstation"],
     ignore=GPU_IGNORE,
     conditions="NEW|USED",
 )
@@ -136,7 +151,7 @@ RTX_3090 = Item(
     id="rtx-3090",
     query="RTX 3090",
     require=["3090"],
-    exclude=GPU_EXCLUDE + PREBUILT + ["ti"],
+    exclude=GPU_EXCLUDE + PREBUILT + ["ti", "workstation"],
     ignore=GPU_IGNORE,
 )
 

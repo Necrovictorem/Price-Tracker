@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS runs (
     status TEXT NOT NULL,
     message TEXT
 );
+CREATE TABLE IF NOT EXISTS review_listings (
+    id INTEGER PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    observed_on DATE NOT NULL,
+    source TEXT NOT NULL,
+    price_total REAL NOT NULL,
+    currency TEXT NOT NULL,
+    listing_url TEXT,
+    listing_title TEXT
+);
 """
 
 
@@ -68,6 +78,30 @@ def save_observation(
         """,
         (item_id, observed_on.isoformat(), source, price_total, currency,
          listing_url, listing_title, listings_seen, listings_kept),
+    )
+    conn.commit()
+
+
+def save_review_listing(
+    conn: sqlite3.Connection,
+    *,
+    item_id: str,
+    source: str,
+    price_total: float,
+    currency: str,
+    listing_url: str,
+    listing_title: str,
+    observed_on: date | None = None,
+) -> None:
+    """Log a listing that matched but looked ambiguous — never counted as a tracked price."""
+    observed_on = observed_on or date.today()
+    conn.execute(
+        """
+        INSERT INTO review_listings (item_id, observed_on, source, price_total, currency,
+                                     listing_url, listing_title)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, observed_on.isoformat(), source, price_total, currency, listing_url, listing_title),
     )
     conn.commit()
 

@@ -44,10 +44,24 @@ def _normalize(item: Item, title: str) -> str:
 
 
 def is_valid(item: Item, listing: Listing) -> bool:
+    return classify(item, listing) == "valid"
+
+
+def classify(item: Item, listing: Listing) -> str:
+    """"irrelevant" (wrong item), "excluded" (junk), "review" (ambiguous), or "valid"."""
     title = _normalize(item, listing.title)
     if not all(_has_term(title, t) for t in item.require):
-        return False
-    return not any(_has_term(title, t) for t in item.exclude)
+        return "irrelevant"
+    if any(_has_term(title, t) for t in item.exclude):
+        return "excluded"
+    if any(_has_term(title, t) for t in item.review):
+        return "review"
+    return "valid"
+
+
+def review_candidates(item: Item, listings: list[Listing]) -> list[Listing]:
+    """Listings that matched but look ambiguous (bundles, etc.) — never used as the tracked price."""
+    return [l for l in listings if classify(item, l) == "review"]
 
 
 def lowest_valid(item: Item, listings: list[Listing]) -> tuple[Listing | None, int]:

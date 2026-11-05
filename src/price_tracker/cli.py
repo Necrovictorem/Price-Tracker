@@ -9,11 +9,19 @@ from dotenv import load_dotenv
 from . import db
 from .collectors import ebay
 # from .collectors import reddit  # dormant — see collectors/reddit.py's module docstring
-from .filters import lowest_valid
+from .filters import lowest_valid, review_candidates
 from .items import ITEMS
 
 
 def _save_result(conn, source: str, item, listings) -> None:
+    # Save anything ambiguous (bundles, etc.) separately — it's never the tracked price.
+    reviews = review_candidates(item, listings)
+    for r in reviews:
+        db.save_review_listing(
+            conn, item_id=item.id, source=source, price_total=r.total, currency=r.currency,
+            listing_url=r.url, listing_title=r.title,
+        )
+
     # Shared by both sources: apply this item's filter rules, then either log
     # that nothing survived, or save the cheapest valid listing for today.
     best, kept = lowest_valid(item, listings)
@@ -21,17 +29,19 @@ def _save_result(conn, source: str, item, listings) -> None:
         db.log_run(conn, source=source, item_id=item.id, status="empty",
                    message=f"{len(listings)} seen, 0 passed filters")
         print(f"{item.id} [{source}]: {len(listings)} listings seen, none passed the filters")
-        return
+    else:
+        db.save_observation(
+            conn, item_id=item.id, source=source, price_total=best.total, currency=best.currency,
+            listing_url=best.url, listing_title=best.title,
+            listings_seen=len(listings), listings_kept=kept,
+        )
+        db.log_run(conn, source=source, item_id=item.id, status="ok")
+        print(f"{item.id} [{source}]: {len(listings)} seen, {kept} kept, lowest {best.currency} {best.total:,.2f}")
+        print(f"  {best.title}")
+        print(f"  {best.url}")
 
-    db.save_observation(
-        conn, item_id=item.id, source=source, price_total=best.total, currency=best.currency,
-        listing_url=best.url, listing_title=best.title,
-        listings_seen=len(listings), listings_kept=kept,
-    )
-    db.log_run(conn, source=source, item_id=item.id, status="ok")
-    print(f"{item.id} [{source}]: {len(listings)} seen, {kept} kept, lowest {best.currency} {best.total:,.2f}")
-    print(f"  {best.title}")
-    print(f"  {best.url}")
+    if reviews:
+        print(f"  ({len(reviews)} listing(s) flagged for review, not counted — see `view --review`)")
 
 
 def run() -> int:
@@ -98,8 +108,25 @@ def run() -> int:
     return 1 if failures else 0
 
 
-def view() -> int:
+def view(review: bool = False) -> int:
     conn = db.connect()
+    if review:
+        rows = conn.execute("""
+            SELECT item_id, source, observed_on, price_total, currency, listing_title, listing_url
+            FROM review_listings
+            ORDER BY observed_on DESC, item_id, source
+        """).fetchall()
+        if not rows:
+            print("No review-flagged listings.")
+            return 0
+        print(f"{'ITEM':<18} {'SOURCE':<14} {'DATE':<11} {'PRICE':>12}  TITLE")
+        for item_id, source, observed_on, price_total, currency, title, url in rows:
+            price = f"{currency} {price_total:,.2f}"
+            short_title = title if len(title) <= 50 else title[:47] + "..."
+            print(f"{item_id:<18} {source:<14} {observed_on:<11} {price:>12}  {short_title}")
+            print(f"  {url}")
+        return 0
+
     # For each item/source pair, join against the max observed_on for that pair
     # so we only show the single most recent row — not every historical day.
     rows = conn.execute("""
@@ -126,10 +153,14 @@ def view() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Listing titles are free text from strangers on eBay and can contain characters
+    # the Windows console's default codepage can't display (emoji, symbols, etc.).
+    # Replace them instead of letting print() crash the whole run.
+    sys.stdout.reconfigure(errors="replace")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["run"]:
         return run()
     if argv[:1] == ["view"]:
-        return view()
-    print("usage: python -m price_tracker run|view")
+        return view(review="--review" in argv[1:])
+    print("usage: python -m price_tracker run|view [--review]")
     return 2

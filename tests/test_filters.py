@@ -1,4 +1,4 @@
-from price_tracker.filters import Listing, is_valid, lowest_valid
+from price_tracker.filters import Listing, classify, is_valid, lowest_valid, review_candidates
 from price_tracker.items import (
     DDR4_512GB_KIT,
     DDR4_64GB_RDIMM,
@@ -95,3 +95,21 @@ def test_7713_and_board_variants():
     assert is_valid(EPYC_7713, listing("AMD EPYC 7713 64 Core 2.0GHz Unlocked"))
     assert is_valid(H12SSL, listing("Supermicro H12SSL-i ATX SP3 motherboard"))
     assert is_valid(H12SSL, listing("Supermicro H12SSL-NT 10GbE"))
+
+
+def test_board_combo_flagged_for_review_not_tracked():
+    combo = listing("Supermicro H12SSL-i ATX Server Motherboard + EPYC 7502 CPU Combo")
+    assert classify(H12SSL, combo) == "review"
+    assert not is_valid(H12SSL, combo)
+
+    board_only = listing("Supermicro H12SSL-i ATX SP3 motherboard")
+    assert classify(H12SSL, board_only) == "valid"
+
+
+def test_review_candidates_excluded_from_lowest_valid():
+    combo = listing("Supermicro H12SSL-i Motherboard + EPYC 7502 CPU Bundle", price=200)
+    board = listing("Supermicro H12SSL-i ATX SP3 motherboard", price=500)
+    best, kept = lowest_valid(H12SSL, [combo, board])
+    assert best is board  # the cheaper combo is never picked as the tracked price
+    assert kept == 1
+    assert review_candidates(H12SSL, [combo, board]) == [combo]
