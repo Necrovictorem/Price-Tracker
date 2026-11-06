@@ -16,6 +16,8 @@ class Item:
     # Phrases removed from the title before matching (e.g. "never mined").
     ignore: list[str] = field(default_factory=list)
     conditions: str = "USED"
+    # Buy-target price for alerts.py's "below target" rule. None = that rule never fires for this item.
+    target: float | None = None
 
 
 CPU_EXCLUDE = [

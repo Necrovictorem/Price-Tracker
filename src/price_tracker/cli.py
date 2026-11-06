@@ -2,18 +2,19 @@
 
 import os
 import sys
+from datetime import date
 
 import httpx
 from dotenv import load_dotenv
 
-from . import db, llm_review
+from . import alerts, db, llm_review
 from .collectors import ebay
 # from .collectors import reddit  # dormant — see collectors/reddit.py's module docstring
 from .filters import lowest_valid, review_candidates
 from .items import ITEMS
 
 
-def _save_result(conn, source: str, item, listings, verdict_by_listing: dict) -> None:
+def _save_result(conn, source: str, item, listings, verdict_by_listing: dict, run_alerts: list) -> None:
     # Ambiguous listings (bundles, etc.): an LLM "standalone" verdict promotes
     # one back into price comparison below; everything else is logged for
     # Antonio to look at, never counted as the tracked price.
@@ -50,6 +51,12 @@ def _save_result(conn, source: str, item, listings, verdict_by_listing: dict) ->
             listings_seen=len(listings), listings_kept=kept,
             price_source="llm" if best in promoted else "keyword",
         )
+
+        # Check this item/source's freshly-saved price against its history
+        # (below target / new low / sharp drop) and collect any alerts it
+        # triggers -- they're all sent together as one push at the end of run().
+        run_alerts.extend(alerts.check(conn, item, source, best.total, date.today()))
+
         db.log_run(conn, source=source, item_id=item.id, status="ok")
         print(f"{item.id} [{source}]: {len(listings)} seen, {kept} kept, lowest {best.currency} {best.total:,.2f}")
         print(f"  {best.title}")
@@ -85,6 +92,7 @@ def run() -> int:
     conn = db.connect()
     failures = 0
     results = []  # (item, listings) for everything that fetched successfully
+    run_alerts = []  # every alert triggered this run, collected across all items
 
     # One httpx.Client for the whole run: it reuses the underlying TCP connection
     # instead of opening a new one for every request. Also used for the local
@@ -134,7 +142,10 @@ def run() -> int:
         verdict_by_listing = {candidates[i][1]: v for i, v in verdicts.items()}
 
         for item, listings in results:
-            _save_result(conn, ebay_source, item, listings, verdict_by_listing)
+            _save_result(conn, ebay_source, item, listings, verdict_by_listing, run_alerts)
+
+        # One combined ntfy push for the whole run, not one per alert.
+        alerts.send(client, run_alerts)
 
     # Exit code convention: 0 = everything ran clean, 1 = at least one source/item errored.
     return 1 if failures else 0
