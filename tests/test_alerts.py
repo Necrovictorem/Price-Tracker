@@ -71,7 +71,9 @@ def test_send_posts_one_combined_message(tmp_path):
         del os.environ["NTFY_TOPIC"]  # don't leak this into other tests
 
 
-def test_send_skips_without_a_topic(tmp_path):
-    # No NTFY_TOPIC configured -- send() should just print, not make a network call or crash.
+def test_send_prints_each_alert_without_a_topic(capsys):
+    # No NTFY_TOPIC configured -- send() should print every alert's message
+    # (not just a count), and make no network call.
     with httpx.Client() as client:
-        alerts.send(client, [alerts.Alert("x", "new_low", "msg")])
+        alerts.send(client, [alerts.Alert("x", "new_low", "x: 100 is a new low")])
+    assert "x: 100 is a new low" in capsys.readouterr().out

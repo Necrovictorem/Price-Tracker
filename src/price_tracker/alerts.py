@@ -71,8 +71,11 @@ def send(client: httpx.Client, alerts: list[Alert]) -> None:
         return
     topic = os.getenv("NTFY_TOPIC")
     if not topic:
-        # Alerts still "happened" -- just print them so they're not silently lost.
-        print(f"  ({len(alerts)} alert(s) triggered, but NTFY_TOPIC isn't set — see .env.example)")
+        # Alerts still "happened" -- print each one so they're not silently
+        # lost just because ntfy isn't configured yet.
+        print(f"  {len(alerts)} alert(s) triggered (NTFY_TOPIC isn't set, see .env.example):")
+        for a in alerts:
+            print(f"    - {a.message}")
         return
     server = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
     body = "\n".join(a.message for a in alerts)  # one line per alert in the push body
