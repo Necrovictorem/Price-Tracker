@@ -102,3 +102,33 @@ def test_server_routes_root_and_404s_everything_else(tmp_path, monkeypatch):
         # failed test would leave a server thread running in the background.
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_recent_change_compares_against_about_a_week_ago():
+    # 10-29 is the newest point at least 7 days before 11-05, so it's the
+    # reference (10-28 is older than needed). 900 -> 450 is -50%.
+    points = [("2026-10-28", 1000.0), ("2026-10-29", 900.0), ("2026-11-05", 450.0)]
+    assert dashboard._recent_change(points) == (-0.5, "2026-10-29")
+
+
+def test_recent_change_falls_back_to_oldest_day_and_needs_two_days():
+    # Less than a week of history: compare against the oldest day we have.
+    assert dashboard._recent_change([("2026-11-04", 100.0), ("2026-11-05", 75.0)]) == (-0.25, "2026-11-04")
+    # A single day has nothing to compare against.
+    assert dashboard._recent_change([("2026-11-05", 100.0)]) is None
+
+
+def test_render_page_puts_the_biggest_mover_first(tmp_path):
+    # ITEMS[0] comes first in items.py but didn't move; ITEMS[1] dropped 30%,
+    # so ITEMS[1] should now come first on the page.
+    conn = db.connect(tmp_path / "t.db")
+    still, mover = ITEMS[0].id, ITEMS[1].id
+    for item_id, before, after in [(still, 100.0, 100.0), (mover, 100.0, 70.0)]:
+        for day, price in [(date(2026, 11, 4), before), (date(2026, 11, 5), after)]:
+            db.save_observation(
+                conn, item_id=item_id, source="ebay", price_total=price, currency="USD",
+                listing_url="https://ebay.com/itm/1", listing_title="t",
+                listings_seen=1, listings_kept=1, observed_on=day,
+            )
+    page = dashboard.render_page(conn)
+    assert page.index(f"<h2>{mover}") < page.index(f"<h2>{still}")

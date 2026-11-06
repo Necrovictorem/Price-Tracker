@@ -9,6 +9,7 @@ no new dependency, no CDN script to load, works fully offline.
 import html
 import http.server
 import sqlite3
+from datetime import date, timedelta
 
 from . import db
 from .items import ITEMS
@@ -19,6 +20,10 @@ from .items import ITEMS
 CHART_WIDTH = 600
 CHART_HEIGHT = 160
 CHART_PAD = 30
+
+# Items are ranked by how much their price moved over roughly this many
+# days, so the biggest movers sit at the top of the page.
+CHANGE_WINDOW_DAYS = 7
 
 # Colors used for each line on a chart, in order. If an item somehow has
 # more than 4 sources, the 5th line just reuses the 1st color (see the "% "
@@ -37,6 +42,10 @@ section.item { border-top: 1px solid #e2e8f0; padding: 1rem 0; }
 section.item h2 { margin: 0 0 0.3rem; font-size: 1.1rem; }
 .legend { font-size: 0.85rem; color: #475569; }
 .review { color: #b45309; font-size: 0.85rem; }
+.change { font-size: 0.85rem; font-weight: normal; margin-left: 0.5rem; }
+.down { color: #059669; }  /* cheaper: good news for a buyer */
+.up { color: #dc2626; }
+.flat { color: #94a3b8; }
 """
 
 
@@ -86,6 +95,49 @@ def _history(conn: sqlite3.Connection, item_id: str) -> dict[str, list[tuple[str
     for source, day, price in rows:
         by_source.setdefault(source, []).append((day, price))
     return by_source
+
+
+def _recent_change(points: list[tuple[str, float]]) -> tuple[float, str] | None:
+    """How much one source's price moved: the latest price compared with the
+    price about CHANGE_WINDOW_DAYS earlier. Returns (fraction, reference_day),
+    e.g. (-0.12, "2026-10-29") means 12% cheaper than on Oct 29. None if
+    there's only one day of history, since there's nothing to compare yet."""
+    # Need at least two days to measure any change at all.
+    if len(points) < 2:
+        return None
+    latest_day, latest_price = points[-1]
+    # The cutoff date: CHANGE_WINDOW_DAYS before the latest observation.
+    cutoff = (date.fromisoformat(latest_day) - timedelta(days=CHANGE_WINDOW_DAYS)).isoformat()
+    # Prefer the newest point at or before the cutoff (same idea as alerts.py's
+    # sharp-drop rule). If history doesn't reach back that far yet, use the
+    # oldest point we have, so a young tracker still gets a ranking.
+    older = [(d, p) for d, p in points[:-1] if d <= cutoff]
+    ref_day, ref_price = older[-1] if older else points[0]
+    # Guard against dividing by zero, which would crash the whole page.
+    if ref_price <= 0:
+        return None
+    return (latest_price - ref_price) / ref_price, ref_day
+
+
+def _sort_key(change: tuple[float, str] | None, has_data: bool) -> tuple[int, float]:
+    """Page order: biggest price move first (up OR down), then items with
+    only one day of data, then items that have never had a price."""
+    if change is not None:
+        return (0, -abs(change[0]))  # minus sign: bigger move sorts earlier
+    return (1, 0.0) if has_data else (2, 0.0)
+
+
+def _change_label(change: tuple[float, str] | None) -> str:
+    """Small colored note next to the item's name, e.g. "▼ 12% since 2026-10-29".
+    The date comes from our own database, not from eBay, so it's safe as-is."""
+    if change is None:
+        return ""
+    fraction, since = change
+    # Anything under half a percent rounds to 0%, so call it flat.
+    if abs(fraction) < 0.005:
+        return f'<span class="change flat">no change since {since}</span>'
+    arrow, css = ("▼", "down") if fraction < 0 else ("▲", "up")
+    return f'<span class="change {css}">{arrow} {abs(fraction):.0%} since {since}</span>'
 
 
 def _svg_chart(by_source: dict[str, list[tuple[str, float]]]) -> str:
@@ -173,10 +225,11 @@ def _svg_chart(by_source: dict[str, list[tuple[str, float]]]) -> str:
 
 
 def render_page(conn: sqlite3.Connection) -> str:
-    """Build the whole dashboard as one HTML string: one <section> per item
-    in items.py's ITEMS list, each showing its latest price, its chart, and
-    how many listings are sitting in `review` (see `view --review`)."""
-    sections = []
+    """Build the whole dashboard as one HTML string: one <section> per item,
+    each showing its latest price, its chart, and how many listings are
+    sitting in `review` (see `view --review`). Items are ordered by how much
+    their price moved recently (biggest move first), not by items.py order."""
+    sections = []  # (sort key, section HTML) pairs, sorted before output
     for item in ITEMS:
         # The single most recent observation row for this item, across any
         # source -- "ORDER BY observed_on DESC LIMIT 1" means "the latest one".
@@ -185,10 +238,16 @@ def render_page(conn: sqlite3.Connection) -> str:
             " WHERE item_id = ? ORDER BY observed_on DESC LIMIT 1",
             (item.id,),
         ).fetchone()
+        # Fetched once here because both the chart and the change label need it.
+        history = _history(conn, item.id)
+        change = None
 
         if latest:
             # fetchone() with 6 columns in the SELECT above unpacks into 6 variables, in that same order.
             source, day, price, currency, title, url = latest
+            # Measure the change on the same source as the headline price, so two
+            # different sources' prices are never compared with each other.
+            change = _recent_change(history.get(source, []))
             latest_html = (
                 f"<p><strong>{currency} {price:,.2f}</strong> on {day} ({_escape(source)})<br>"
                 f"{_safe_link(url, title)}</p>"
@@ -210,10 +269,15 @@ def render_page(conn: sqlite3.Connection) -> str:
         # One <section> per item: its id as a heading, the latest-price
         # paragraph, the chart (built by pulling this item's full history
         # and handing it to _svg_chart), then the review note if there is one.
-        sections.append(
-            f'<section class="item"><h2>{_escape(item.id)}</h2>{latest_html}'
-            f"{_svg_chart(_history(conn, item.id))}{review_html}</section>"
+        section_html = (
+            f'<section class="item"><h2>{_escape(item.id)}{_change_label(change)}</h2>{latest_html}'
+            f"{_svg_chart(history)}{review_html}</section>"
         )
+        sections.append((_sort_key(change, has_data=latest is not None), section_html))
+
+    # Python's sort is "stable": items with equal keys keep their items.py
+    # order, so the unchanged ones stay grouped Path A, Path B, GPUs.
+    sections.sort(key=lambda pair: pair[0])
 
     # Finally, wrap every item section in one full HTML document: a <head>
     # with the inline stylesheet, a page title, a one-line explanation of
@@ -224,8 +288,9 @@ def render_page(conn: sqlite3.Connection) -> str:
         f"<h1>Price Tracker</h1>"
         f"<p class='note'>Read-only -- updated by the daily scheduled run. "
         f"Leading signals (GPU rental rates, DDR5/Genoa prices) aren't collected yet, "
-        f"so they don't appear here.</p>"
-        f"{''.join(sections)}</body></html>"
+        f"so they don't appear here. "
+        f"Sorted by how much each price moved over the last ~{CHANGE_WINDOW_DAYS} days, biggest move first.</p>"
+        f"{''.join(section for _, section in sections)}</body></html>"
     )
 
 
