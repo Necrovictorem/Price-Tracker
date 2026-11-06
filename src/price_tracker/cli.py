@@ -205,5 +205,12 @@ def main(argv: list[str] | None = None) -> int:
         return run()
     if argv[:1] == ["view"]:
         return view(review="--review" in argv[1:])
-    print("usage: python -m price_tracker run|view [--review]")
+    if argv[:1] == ["dashboard"]:
+        # Imported here rather than at the top of the file, so that running
+        # `run` or `view` never has to import http.server at all -- it's
+        # only loaded on the one code path that actually needs it.
+        from . import dashboard
+        dashboard.serve()
+        return 0
+    print("usage: python -m price_tracker run|view [--review]|dashboard")
     return 2
