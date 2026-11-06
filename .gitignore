@@ -7,3 +7,4 @@ data/*.db
 data/*.db-journal
 CLAUDE.md
 plan.md
+scripts/compare_review_models.py

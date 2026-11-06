@@ -6,42 +6,60 @@ import sys
 import httpx
 from dotenv import load_dotenv
 
-from . import db
+from . import db, llm_review
 from .collectors import ebay
 # from .collectors import reddit  # dormant — see collectors/reddit.py's module docstring
 from .filters import lowest_valid, review_candidates
 from .items import ITEMS
 
 
-def _save_result(conn, source: str, item, listings) -> None:
-    # Save anything ambiguous (bundles, etc.) separately — it's never the tracked price.
+def _save_result(conn, source: str, item, listings, verdict_by_listing: dict) -> None:
+    # Ambiguous listings (bundles, etc.): an LLM "standalone" verdict promotes
+    # one back into price comparison below; everything else is logged for
+    # Antonio to look at, never counted as the tracked price.
     reviews = review_candidates(item, listings)
+    promoted = []
     for r in reviews:
-        db.save_review_listing(
-            conn, item_id=item.id, source=source, price_total=r.total, currency=r.currency,
-            listing_url=r.url, listing_title=r.title,
-        )
+        verdict = verdict_by_listing.get(r)
+        if verdict and verdict["verdict"] == "standalone":
+            promoted.append(r)
+        else:
+            db.save_review_listing(
+                conn, item_id=item.id, source=source, price_total=r.total, currency=r.currency,
+                listing_url=r.url, listing_title=r.title,
+                verdict=verdict["verdict"] if verdict else None,
+                confidence=verdict["confidence"] if verdict else None,
+                reason=verdict["reason"] if verdict else None,
+            )
 
-    # Shared by both sources: apply this item's filter rules, then either log
-    # that nothing survived, or save the cheapest valid listing for today.
-    best, kept = lowest_valid(item, listings)
-    if best is None:
+    # Shared by both sources: apply this item's filter rules, add back any
+    # LLM-promoted listings, then either log that nothing survived, or save
+    # the cheapest of the two pools as today's price.
+    kw_best, kw_kept = lowest_valid(item, listings)
+    candidates = ([kw_best] if kw_best else []) + promoted
+    if not candidates:
         db.log_run(conn, source=source, item_id=item.id, status="empty",
                    message=f"{len(listings)} seen, 0 passed filters")
         print(f"{item.id} [{source}]: {len(listings)} listings seen, none passed the filters")
     else:
+        best = min(candidates, key=lambda l: l.total)
+        kept = kw_kept + len(promoted)
         db.save_observation(
             conn, item_id=item.id, source=source, price_total=best.total, currency=best.currency,
             listing_url=best.url, listing_title=best.title,
             listings_seen=len(listings), listings_kept=kept,
+            price_source="llm" if best in promoted else "keyword",
         )
         db.log_run(conn, source=source, item_id=item.id, status="ok")
         print(f"{item.id} [{source}]: {len(listings)} seen, {kept} kept, lowest {best.currency} {best.total:,.2f}")
         print(f"  {best.title}")
         print(f"  {best.url}")
+        if best in promoted:
+            print(f"  (LLM-promoted from review: {verdict_by_listing[best]['reason']})")
 
-    if reviews:
-        print(f"  ({len(reviews)} listing(s) flagged for review, not counted — see `view --review`)")
+    still_in_review = len(reviews) - len(promoted)
+    if still_in_review:
+        print(f"  ({still_in_review} listing(s) flagged for review, not counted — see `view --review`)")
 
 
 def run() -> int:
@@ -66,9 +84,11 @@ def run() -> int:
 
     conn = db.connect()
     failures = 0
+    results = []  # (item, listings) for everything that fetched successfully
 
     # One httpx.Client for the whole run: it reuses the underlying TCP connection
-    # instead of opening a new one for every request.
+    # instead of opening a new one for every request. Also used for the local
+    # Ollama calls below -- it's a plain HTTP client, not tied to eBay.
     with httpx.Client(timeout=30) as client:
         ebay_token = ebay.get_token(client, creds["EBAY_CLIENT_ID"], creds["EBAY_CLIENT_SECRET"], sandbox=sandbox)
 
@@ -91,7 +111,7 @@ def run() -> int:
                 print(f"{item.id} [{ebay_source}]: error {e}")
                 failures += 1
             else:
-                _save_result(conn, ebay_source, item, listings)
+                results.append((item, listings))
 
             # --- Reddit (r/hardwareswap): dormant, see note above -----------
             # try:
@@ -101,8 +121,20 @@ def run() -> int:
             #     print(f"{item.id} [hardwareswap]: error {e}")
             #     failures += 1
             # else:
-            #     _save_result(conn, "hardwareswap", item, listings)
+            #     results.append((item, listings))  # under its own source, if ever revived
             # ------------------------------------------------------------------
+
+        # One LLM call for every item's review-tier listings together, instead
+        # of one per item -- the model cold-loads either way (it unloads after
+        # ~5 min idle), so batching avoids paying that load more than once per run.
+        candidates = [(item, r) for item, listings in results for r in review_candidates(item, listings)]
+        verdicts = llm_review.classify(client, [r for _, r in candidates]) if candidates else {}
+        if candidates:
+            llm_review.unload(client)
+        verdict_by_listing = {candidates[i][1]: v for i, v in verdicts.items()}
+
+        for item, listings in results:
+            _save_result(conn, ebay_source, item, listings, verdict_by_listing)
 
     # Exit code convention: 0 = everything ran clean, 1 = at least one source/item errored.
     return 1 if failures else 0
@@ -112,18 +144,18 @@ def view(review: bool = False) -> int:
     conn = db.connect()
     if review:
         rows = conn.execute("""
-            SELECT item_id, source, observed_on, price_total, currency, listing_title, listing_url
+            SELECT item_id, source, observed_on, price_total, currency, listing_title, listing_url, verdict
             FROM review_listings
             ORDER BY observed_on DESC, item_id, source
         """).fetchall()
         if not rows:
             print("No review-flagged listings.")
             return 0
-        print(f"{'ITEM':<18} {'SOURCE':<14} {'DATE':<11} {'PRICE':>12}  TITLE")
-        for item_id, source, observed_on, price_total, currency, title, url in rows:
+        print(f"{'ITEM':<18} {'SOURCE':<14} {'DATE':<11} {'PRICE':>12}  {'VERDICT':<11} TITLE")
+        for item_id, source, observed_on, price_total, currency, title, url, verdict in rows:
             price = f"{currency} {price_total:,.2f}"
             short_title = title if len(title) <= 50 else title[:47] + "..."
-            print(f"{item_id:<18} {source:<14} {observed_on:<11} {price:>12}  {short_title}")
+            print(f"{item_id:<18} {source:<14} {observed_on:<11} {price:>12}  {verdict or '-':<11} {short_title}")
             print(f"  {url}")
         return 0
 
