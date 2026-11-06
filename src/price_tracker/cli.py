@@ -139,6 +139,10 @@ def run() -> int:
         verdicts = llm_review.classify(client, [r for _, r in candidates]) if candidates else {}
         if candidates:
             llm_review.unload(client)
+            if not verdicts:
+                # classify() returns {} when Ollama is down or answered with junk twice.
+                # Say so in the log, so a dead Ollama doesn't go unnoticed for weeks.
+                print(f"LLM review skipped (is Ollama running?): {len(candidates)} listing(s) stay in review")
         verdict_by_listing = {candidates[i][1]: v for i, v in verdicts.items()}
 
         for item, listings in results:

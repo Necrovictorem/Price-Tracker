@@ -94,8 +94,14 @@ def _classify_once(client: httpx.Client, listings: list[Listing]) -> dict[int, d
     except (httpx.HTTPError, json.JSONDecodeError, KeyError):
         return {}
 
+    # Structured output should always give a list of objects, but this is
+    # still model output: if the shape is wrong, treat it like malformed JSON.
+    if not isinstance(parsed, list):
+        return {}
     result = {}
     for row in parsed:
+        if not isinstance(row, dict):
+            continue
         index = row.get("index")
         verdict = row.get("verdict")
         if isinstance(index, int) and 0 <= index < len(listings) and verdict in VALID_VERDICTS:
@@ -105,5 +111,10 @@ def _classify_once(client: httpx.Client, listings: list[Listing]) -> dict[int, d
 
 def unload(client: httpx.Client) -> None:
     """Free the model's VRAM right after the daily classification call,
-    rather than waiting out Ollama's ~5 min idle timeout."""
-    client.post(OLLAMA_GENERATE_URL, json={"model": MODEL, "keep_alive": 0}, timeout=30)
+    rather than waiting out Ollama's ~5 min idle timeout. Best effort: if
+    Ollama isn't reachable there's nothing loaded to free, so a failure here
+    must never stop the run from saving prices."""
+    try:
+        client.post(OLLAMA_GENERATE_URL, json={"model": MODEL, "keep_alive": 0}, timeout=30)
+    except httpx.HTTPError:
+        pass

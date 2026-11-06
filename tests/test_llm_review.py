@@ -57,3 +57,11 @@ def test_unload_sends_zero_keep_alive():
         llm_review.unload(client)
     sent = json.loads(route.calls.last.request.content)
     assert sent == {"model": llm_review.MODEL, "keep_alive": 0}
+
+
+@respx.mock
+def test_unload_ignores_ollama_being_down():
+    # Ollama not running must not crash the daily run -- unload is best effort.
+    respx.post(llm_review.OLLAMA_GENERATE_URL).mock(side_effect=httpx.ConnectError("refused"))
+    with httpx.Client() as client:
+        llm_review.unload(client)  # passes as long as this doesn't raise
